@@ -97,7 +97,7 @@ class Config:
 ########################
 configs = [
     # https://huggingface.co/stabilityai/stablelm-base-alpha-3b/blob/main/config.json
-    dict(org="stabilityai", name="stablelm-base-alpha-3b", padding_multiple=512),
+    dict(org="stabilityai", name="stablelm-base-alpha-3b", padding_multiple=512, n_layer=5),
     # https://huggingface.co/stabilityai/stablelm-base-alpha-7b/blob/main/config.json
     dict(org="stabilityai", name="stablelm-base-alpha-7b", n_head=48, n_embd=6144, padding_multiple=256),
     # https://huggingface.co/stabilityai/stablelm-tuned-alpha-3b/blob/main/config.json
