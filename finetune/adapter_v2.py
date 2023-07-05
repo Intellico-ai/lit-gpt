@@ -26,8 +26,8 @@ from lit_gpt.utils import lazy_load, check_valid_checkpoint_dir, step_csv_logger
 from lit_gpt.speed_monitor import SpeedMonitor, measure_flops, estimate_flops
 from scripts.prepare_alpaca import generate_prompt
 
-eval_interval = 600
-save_interval = 1000
+eval_interval = 10
+save_interval = 5
 eval_iters = 100
 log_interval = 1
 devices = 1
@@ -290,9 +290,9 @@ def get_max_seq_length(data: List[Dict]) -> Tuple[int, int, int]:
     )
 
 
-def save_adapter_v2_checkpoint(fabric, model, file_path: Path):
+def save_adapter_v2_checkpoint(fabric:  L.Fabric, model, file_path: Path):
     fabric.print(f"Saving adapter v2 weights to {str(file_path)!r}")
-    fabric.save(file_path, {"model": model}, filter={"model": adapter_filter})
+    fabric.save(file_path, {"model": model}, filter={"model": adapter_filter}, )
 
 
 if __name__ == "__main__":
