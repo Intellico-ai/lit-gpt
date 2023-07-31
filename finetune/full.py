@@ -1,14 +1,12 @@
 import os
 import sys
 import time
-from functools import partial
 from pathlib import Path
 from typing import Optional, Tuple, Dict, List
 
 import lightning as L
 import torch
 from lightning.fabric.strategies import FSDPStrategy, XLAStrategy
-from torch.distributed.fsdp.wrap import transformer_auto_wrap_policy
 
 # support running without installing as a package
 wd = Path(__file__).parent.parent.resolve()
@@ -18,7 +16,7 @@ from generate.base import generate
 from lit_gpt.model import GPT, Config, Block
 from lit_gpt.tokenizer import Tokenizer
 from lit_gpt.utils import lazy_load, check_valid_checkpoint_dir, step_csv_logger, chunked_cross_entropy
-from lit_gpt.speed_monitor import SpeedMonitor, measure_flops, estimate_flops
+from lit_gpt.speed_monitor import SpeedMonitorFabric as SpeedMonitor, measure_flops, estimate_flops
 from scripts.prepare_alpaca import generate_prompt
 
 eval_interval = 600
@@ -60,10 +58,9 @@ def setup(
             fabric_devices = "auto"
             strategy = XLAStrategy(sync_module_states=False)
         else:
-            auto_wrap_policy = partial(transformer_auto_wrap_policy, transformer_layer_cls={Block})
             strategy = FSDPStrategy(
-                auto_wrap_policy=auto_wrap_policy,
-                activation_checkpointing=Block,
+                auto_wrap_policy={Block},
+                activation_checkpointing_policy={Block},
                 state_dict_type="full",
                 limit_all_gathers=True,
                 cpu_offload=False,
@@ -73,16 +70,16 @@ def setup(
 
     logger = step_csv_logger(out_dir.parent, out_dir.name, flush_logs_every_n_steps=log_interval)
     fabric = L.Fabric(devices=fabric_devices, strategy=strategy, precision=precision, loggers=logger)
-    fabric.print(hparams)
     fabric.launch(main, data_dir, checkpoint_dir, out_dir)
 
 
 def main(fabric: L.Fabric, data_dir: Path, checkpoint_dir: Path, out_dir: Path):
+    fabric.print(hparams)
     check_valid_checkpoint_dir(checkpoint_dir)
 
     speed_monitor = SpeedMonitor(fabric, window_size=50, time_unit="seconds")
 
-    fabric.seed_everything(1337 + fabric.global_rank)
+    fabric.seed_everything(1337)  # same seed for every process to init model (FSDP)
 
     if fabric.global_rank == 0:
         os.makedirs(out_dir, exist_ok=True)
@@ -99,10 +96,12 @@ def main(fabric: L.Fabric, data_dir: Path, checkpoint_dir: Path, out_dir: Path):
         model.load_state_dict(checkpoint)
 
     num_params = sum(p.numel() for p in model.parameters())
-    fabric.print(f"Number of trainable parameters: {num_params}")
+    fabric.print(f"Number of trainable parameters: {num_params:,}")
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
     model, optimizer = fabric.setup(model, optimizer)
+
+    fabric.seed_everything(1337 + fabric.global_rank)
 
     train_time = time.time()
     train(fabric, model, optimizer, train_data, val_data, checkpoint_dir, out_dir, speed_monitor)
@@ -256,10 +255,10 @@ def get_batch(
     x = torch.stack([pad_right(x, pad_id=0) for x in input_ids])
     y = torch.stack([pad_right(x, pad_id=-1) for x in labels])
 
-    if fabric.device.type in ("mps", "xla"):
-        x, y = fabric.to_device((x, y))
-    else:
+    if fabric.device.type == "cuda" and x.device.type == "cpu":
         x, y = fabric.to_device((x.pin_memory(), y.pin_memory()))
+    else:
+        x, y = fabric.to_device((x, y))
     return x, y
 
 
@@ -286,6 +285,6 @@ if __name__ == "__main__":
     # torch.backends.cuda.enable_flash_sdp(False)
     torch.set_float32_matmul_precision("high")
 
-    from jsonargparse.cli import CLI
+    from jsonargparse import CLI
 
     CLI(setup)

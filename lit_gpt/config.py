@@ -1,4 +1,3 @@
-import math
 from dataclasses import dataclass
 from typing import Optional, Any, Type, Literal
 
@@ -66,8 +65,7 @@ class Config:
         if self.intermediate_size is None:
             if self._mlp_class == "LLaMAMLP":
                 raise ValueError("The config needs to set the `intermediate_size`")
-            else:
-                self.intermediate_size = 4 * self.n_embd
+            self.intermediate_size = 4 * self.n_embd
 
     @property
     def head_size(self) -> int:
@@ -370,7 +368,7 @@ long_chat = [
     dict(
         org="lmsys",
         name="longchat-7b-16k",
-        block_size=2048,
+        block_size=16384,
         vocab_size=32000,
         padding_multiple=64,
         n_layer=32,
@@ -389,7 +387,7 @@ long_chat = [
     dict(
         org="lmsys",
         name="longchat-13b-16k",
-        block_size=2048,
+        block_size=16384,
         vocab_size=32000,
         padding_multiple=64,
         n_layer=40,
@@ -406,6 +404,125 @@ long_chat = [
     ),
 ]
 configs.extend(long_chat)
+
+
+######################
+# NousResearch Hermes
+######################
+nous_research = [
+    # https://huggingface.co/NousResearch/Nous-Hermes-13B/blob/main/config.json
+    dict(
+        org="NousResearch",
+        name="Nous-Hermes-13b",
+        block_size=2048,
+        padded_vocab_size=32001,
+        n_layer=40,
+        n_head=40,
+        n_embd=5120,
+        rotary_percentage=1.0,
+        parallel_residual=False,
+        bias=False,
+        _norm_class="RMSNorm",
+        norm_eps=1e-6,
+        _mlp_class="LLaMAMLP",
+        intermediate_size=13824,
+    )
+]
+configs.extend(nous_research)
+
+
+###############
+# Meta LLaMA 2
+###############
+llama_2 = [
+    # https://huggingface.co/meta-llama/Llama-2-7b-hf/blob/main/config.json
+    dict(
+        org="meta-llama",
+        name="Llama-2-7b{}-hf",
+        block_size=4096,
+        vocab_size=32000,
+        padding_multiple=64,
+        n_layer=32,
+        n_head=32,
+        n_embd=4096,
+        rotary_percentage=1.0,
+        parallel_residual=False,
+        bias=False,
+        _norm_class="RMSNorm",
+        norm_eps=1e-5,
+        _mlp_class="LLaMAMLP",
+        intermediate_size=11008,
+    ),
+    # https://huggingface.co/meta-llama/Llama-2-13b-hf/blob/main/config.json
+    dict(
+        org="meta-llama",
+        name="Llama-2-13b{}-hf",
+        block_size=4096,
+        vocab_size=32000,
+        padding_multiple=64,
+        n_layer=40,
+        n_head=40,
+        n_embd=5120,
+        rotary_percentage=1.0,
+        parallel_residual=False,
+        bias=False,
+        _norm_class="RMSNorm",
+        norm_eps=1e-5,
+        _mlp_class="LLaMAMLP",
+        intermediate_size=13824,
+    ),
+    # https://huggingface.co/meta-llama/Llama-2-70b-hf/blob/main/config.json
+    dict(
+        org="meta-llama",
+        name="Llama-2-70b{}-hf",
+        block_size=4096,
+        vocab_size=32000,
+        padding_multiple=64,
+        n_layer=80,
+        n_head=64,
+        n_embd=8192,
+        n_query_groups=8,
+        rotary_percentage=1.0,
+        parallel_residual=False,
+        bias=False,
+        _norm_class="RMSNorm",
+        norm_eps=1e-5,
+        _mlp_class="LLaMAMLP",
+        intermediate_size=28672,
+    ),
+]
+for c in llama_2:
+    for kind in ("", "-chat"):
+        copy = c.copy()
+        copy["name"] = c["name"].format(kind)
+        configs.append(copy)
+
+
+##########################
+# Stability AI FreeWilly2
+##########################
+freewilly_2 = [
+    # https://huggingface.co/stabilityai/FreeWilly2/blob/main/config.json
+    dict(
+        org="stabilityai",
+        name="FreeWilly2",
+        block_size=4096,
+        vocab_size=32000,
+        padding_multiple=64,
+        n_layer=80,
+        n_head=64,
+        n_embd=8192,
+        n_query_groups=8,
+        rotary_percentage=1.0,
+        parallel_residual=False,
+        bias=False,
+        _norm_class="RMSNorm",
+        norm_eps=1e-5,
+        _mlp_class="LLaMAMLP",
+        intermediate_size=28672,
+    ),
+]
+configs.extend(freewilly_2)
 
 
 name_to_config = {config["name"]: config for config in configs}

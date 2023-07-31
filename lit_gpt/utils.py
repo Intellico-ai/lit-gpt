@@ -1,6 +1,6 @@
 """Utility functions for training and inference."""
 
-import functools
+from functools import partial
 import pickle
 import sys
 import warnings
@@ -8,7 +8,7 @@ from contextlib import contextmanager
 from io import BytesIO
 from pathlib import Path
 from types import MethodType
-from typing import Optional, Any, Union, List
+from typing import Optional, Any, Union, List, TypeVar, Type
 
 import torch
 import torch.utils._device
@@ -29,14 +29,51 @@ def quantization(mode: Optional[str] = None):
         yield
         return
 
-    if mode == "llm.int8":
-        from quantize.bnb import Linear8bitLt
+    if mode == "bnb.int8":
+        from quantize.bnb import InferenceLinear8bitLt
 
-        quantized_linear_cls = Linear8bitLt
+        quantized_linear_cls = InferenceLinear8bitLt
+    elif mode == "bnb.fp4":
+        from quantize.bnb import Linear4bit
+
+        # Use a class instead `functools.partial` to respect `isinstance` checks and attribute accesses
+        class QuantizedLinear(Linear4bit):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, quant_type="fp4", compress_statistics=False, **kwargs)
+
+        quantized_linear_cls = QuantizedLinear
+    elif mode == "bnb.fp4-dq":
+        from quantize.bnb import Linear4bit
+
+        class QuantizedLinear(Linear4bit):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, quant_type="fp4", compress_statistics=True, **kwargs)
+
+        quantized_linear_cls = QuantizedLinear
+    elif mode == "bnb.nf4":
+        from quantize.bnb import Linear4bit
+
+        class QuantizedLinear(Linear4bit):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, quant_type="nf4", compress_statistics=False, **kwargs)
+
+        quantized_linear_cls = QuantizedLinear
+    elif mode == "bnb.nf4-dq":
+        from quantize.bnb import Linear4bit
+
+        class QuantizedLinear(Linear4bit):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, quant_type="nf4", compress_statistics=True, **kwargs)
+
+        quantized_linear_cls = QuantizedLinear
     elif mode == "gptq.int4":
-        from quantize.bnb import ColBlockQuantizedLinear
+        from quantize.gptq import ColBlockQuantizedLinear
 
-        quantized_linear_cls = functools.partial(ColBlockQuantizedLinear, bits=4, tile_cols=-1)
+        class QuantizedLinear(ColBlockQuantizedLinear):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, bits=4, tile_cols=-1, **kwargs)
+
+        quantized_linear_cls = QuantizedLinear
     else:
         raise ValueError(f"Unknown quantization mode: {mode}")
 
@@ -108,17 +145,15 @@ class NotYetLoadedTensor:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             storage = torch.storage.TypedStorage(wrap_storage=uts, dtype=self.metatensor.dtype, _internal=True)
-        tensor = torch._utils._rebuild_tensor_v2(storage, *self.rebuild_args)
-        return tensor
+        return torch._utils._rebuild_tensor_v2(storage, *self.rebuild_args)
 
     @classmethod
     def __torch_function__(cls, func, types, args=(), kwargs=None):
         if kwargs is None:
             kwargs = {}
         loaded_args = [(a._load_tensor() if isinstance(a, NotYetLoadedTensor) else a) for a in args]
-        res = func(*loaded_args, **kwargs)
+        return func(*loaded_args, **kwargs)
         # gc.collect would be costly here, maybe do it optionally
-        return res
 
     def __getattr__(self, name):
         # properties
@@ -159,11 +194,11 @@ class LazyLoadingUnpickler(pickle.Unpickler):
     def find_class(self, module, name):
         res = super().find_class(module, name)
         if module == "torch._utils" and name == "_rebuild_tensor_v2":
-            return functools.partial(NotYetLoadedTensor.rebuild_tensor_v2, archiveinfo=self)
-        elif module == "torch._tensor" and name == "_rebuild_from_type_v2":
-            return functools.partial(NotYetLoadedTensor.rebuild_from_type_v2, archiveinfo=self)
-        elif module == "torch._utils" and name == "_rebuild_parameter":
-            return functools.partial(NotYetLoadedTensor.rebuild_parameter, archiveinfo=self)
+            return partial(NotYetLoadedTensor.rebuild_tensor_v2, archiveinfo=self)
+        if module == "torch._tensor" and name == "_rebuild_from_type_v2":
+            return partial(NotYetLoadedTensor.rebuild_from_type_v2, archiveinfo=self)
+        if module == "torch._utils" and name == "_rebuild_parameter":
+            return partial(NotYetLoadedTensor.rebuild_parameter, archiveinfo=self)
         return res
 
     def persistent_load(self, pid):
@@ -210,7 +245,7 @@ def check_valid_checkpoint_dir(checkpoint_dir: Path) -> None:
     # list locally available checkpoints
     available = list(Path("checkpoints").glob("*/*"))
     if available:
-        options = f"\n --checkpoint_dir ".join([""] + [repr(str(p.resolve())) for p in available])
+        options = "\n --checkpoint_dir ".join([""] + [repr(str(p.resolve())) for p in available])
         extra = f"\nYou have downloaded locally:{options}\n"
     else:
         extra = ""
@@ -364,8 +399,11 @@ class incremental_save:
         self.zipfile.write_end_of_file()
 
 
-def step_csv_logger(*args: Any, **kwargs: Any) -> CSVLogger:
-    logger = CSVLogger(*args, **kwargs)
+T = TypeVar("T")
+
+
+def step_csv_logger(*args: Any, cls: Type[T] = CSVLogger, **kwargs: Any) -> T:
+    logger = cls(*args, **kwargs)
 
     def merge_by(dicts, key):
         from collections import defaultdict
