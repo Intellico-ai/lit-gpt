@@ -3,7 +3,7 @@ __pycache__
 .DS_Store
 *.egg-info
 build
-
+tb/
 # data
 data
 checkpoints

@@ -9,6 +9,9 @@ import lightning as L
 import torch
 from lightning.fabric.strategies import FSDPStrategy, XLAStrategy
 from torch.distributed.fsdp.wrap import transformer_auto_wrap_policy
+from lightning.pytorch.loggers import TensorBoardLogger
+
+from tqdm import tqdm, trange
 
 # support running without installing as a package
 wd = Path(__file__).parent.parent.resolve()
@@ -27,7 +30,7 @@ from lit_gpt.speed_monitor import SpeedMonitor, measure_flops, estimate_flops
 from scripts.prepare_alpaca import generate_prompt
 
 eval_interval = 10
-save_interval = 5
+save_interval = 100
 eval_iters = 100
 log_interval = 1
 devices = 1
@@ -136,6 +139,8 @@ def train(
     out_dir: Path,
     speed_monitor: SpeedMonitor,
 ) -> None:
+    
+    tb: TensorBoardLogger = TensorBoardLogger("tb", name="prova", flush_secs=1)
     tokenizer = Tokenizer(checkpoint_dir)
     max_seq_length, longest_seq_length, longest_seq_ix = get_max_seq_length(train_data)
 
@@ -159,7 +164,7 @@ def train(
         import torch_xla.core.xla_model as xm
 
         xm.mark_step()
-    for iter_num in range(max_iters):
+    for iter_num in trange(max_iters):
         if step_count <= warmup_steps:
             # linear warmup
             lr = learning_rate * step_count / warmup_steps
@@ -198,10 +203,19 @@ def train(
             lengths=total_lengths,
         )
         if iter_num % log_interval == 0:
-            fabric.print(
-                f"iter {iter_num} step {step_count}: loss {loss.item():.4f}, iter time:"
-                f" {(t1 - iter_t0) * 1000:.2f}ms{' (optimizer.step)' if not is_accumulating else ''}"
+            # fabric.print(
+            #     f"iter {iter_num} step {step_count}: loss {loss.item():.4f}, iter time:"
+            #     f" {(t1 - iter_t0) * 1000:.2f}ms{' (optimizer.step)' if not is_accumulating else ''}"
+            # )
+            tb.log_metrics(
+                {
+                    "loss/train":loss.item(),
+                    "time": (t1 - iter_t0)*1000
+                    },
+                iter_num
             )
+            
+        
 
         if not is_accumulating and step_count % eval_interval == 0:
             t0 = time.time()
@@ -210,6 +224,13 @@ def train(
             speed_monitor.eval_end(t1)
             fabric.print(f"step {iter_num}: val loss {val_loss:.4f}, val time: {t1 * 1000:.2f}ms")
             fabric.barrier()
+            tb.log_metrics(
+                {
+                    "loss/val":val_loss,
+                    "time": (t1 - iter_t0)*1000
+                    },
+                iter_num
+            )
         if not is_accumulating and step_count % save_interval == 0:
             checkpoint_path = out_dir / f"iter-{iter_num:06d}-ckpt.pth"
             save_adapter_v2_checkpoint(fabric, model, checkpoint_path)
@@ -292,7 +313,7 @@ def get_max_seq_length(data: List[Dict]) -> Tuple[int, int, int]:
 
 def save_adapter_v2_checkpoint(fabric:  L.Fabric, model, file_path: Path):
     fabric.print(f"Saving adapter v2 weights to {str(file_path)!r}")
-    fabric.save(file_path, {"model": model}, filter={"model": adapter_filter}, )
+    fabric.save(file_path, {"model": model})
 
 
 if __name__ == "__main__":
