@@ -140,13 +140,17 @@ def train(
     out_dir: Path,
     speed_monitor: SpeedMonitor,
 ) -> None:
-    
+    # creation of a tensorboard logger
     tb: TensorBoardLogger = TensorBoardLogger("tb", name="prova", flush_secs=1)
+    # tokenizer used for converting words into ids
     tokenizer = Tokenizer(checkpoint_dir)
+    # i guess it's used for padding
     max_seq_length, longest_seq_length, longest_seq_ix = get_max_seq_length(train_data)
 
+    # this i think performs a sanity check
     validate(fabric, model, val_data, tokenizer, longest_seq_length)  # sanity check
 
+    # TFLOP  measurament of performance
     with torch.device("meta"):
         meta_model = GPT(model.config)
         mark_only_adapter_v2_as_trainable(meta_model)
@@ -166,24 +170,28 @@ def train(
     total_lengths = 0
     total_t0 = time.perf_counter()
 
+    # i think this is for macos
     if fabric.device.type == "xla":
         import torch_xla.core.xla_model as xm
 
         xm.mark_step()
+    # training loop
     for iter_num in trange(max_iters):
+        # warmup phase where the learning rate grows linearly
         if step_count <= warmup_steps:
             # linear warmup
             lr = learning_rate * step_count / warmup_steps
             for param_group in optimizer.param_groups:
                 param_group["lr"] = lr
 
-        iter_t0 = time.perf_counter()
-
+        iter_t0 = time.time()
+        # gets batch from dataset
         input_ids, targets = get_batch(
             fabric, train_data, longest_seq_length, longest_seq_ix if iter_num == 0 else None
         )
-
+        # gradient accumulation used to have impossible batch sizes if we need it
         is_accumulating = (iter_num + 1) % gradient_accumulation_iters != 0
+        # computes cross_entropy_loss
         with fabric.no_backward_sync(model, enabled=is_accumulating):
             logits = model(input_ids, max_seq_length=max_seq_length, lm_head_chunk_size=128)
             # shift the targets such that output n predicts token n+1
@@ -191,6 +199,7 @@ def train(
             loss = chunked_cross_entropy(logits, targets[..., 1:])
             fabric.backward(loss / gradient_accumulation_iters)
 
+        # if is accumulating performa an optimization step
         if not is_accumulating:
             optimizer.step()
             optimizer.zero_grad()
@@ -209,10 +218,6 @@ def train(
             lengths=total_lengths,
         )
         if iter_num % log_interval == 0:
-            # fabric.print(
-            #     f"iter {iter_num} step {step_count}: loss {loss.item():.4f}, iter time:"
-            #     f" {(t1 - iter_t0) * 1000:.2f}ms{' (optimizer.step)' if not is_accumulating else ''}"
-            # )
             tb.log_metrics(
                 {
                     "loss/train":loss.item(),
