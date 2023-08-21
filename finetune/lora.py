@@ -28,6 +28,10 @@ from lit_gpt.utils import (
 )
 from scripts.prepare_alpaca import generate_prompt
 
+from lightning.pytorch.loggers import TensorBoardLogger
+from datetime import datetime
+from tqdm import tqdm, trange
+    
 eval_interval = 100
 save_interval = 100
 eval_iters = 100
@@ -42,17 +46,17 @@ batch_size = 128
 micro_batch_size = 4
 gradient_accumulation_iters = batch_size // micro_batch_size
 assert gradient_accumulation_iters > 0
-max_iters = 100  # train dataset size
+max_iters = 5000  # train dataset size
 weight_decay = 0.01
 lora_r = 8
 lora_alpha = 16
 lora_dropout = 0.05
 lora_query = True
-lora_key = False
+lora_key = True
 lora_value = True
-lora_projection = False
-lora_mlp = False
-lora_head = False
+lora_projection = True
+lora_mlp = True
+lora_head = True
 warmup_steps = 100
 
 hparams = {k: v for k, v in locals().items() if isinstance(v, (int, float, str)) and not k.startswith("_")}
@@ -60,7 +64,7 @@ hparams = {k: v for k, v in locals().items() if isinstance(v, (int, float, str))
 
 def setup(
     data_dir: Path = Path("data/alpaca"),
-    checkpoint_dir: Path = Path("checkpoints/stabilityai/stablelm-base-alpha-3b"),
+    checkpoint_dir: Path = Path(""),
     out_dir: Path = Path("out/lora/alpaca"),
     precision: Optional[str] = None,
     tpu: bool = False,
@@ -97,8 +101,6 @@ def setup(
 
 
 def main(fabric: L.Fabric, data_dir: Path, checkpoint_dir: Path, out_dir: Path, quantize: Optional[str] = None):
-    # prints hparams
-    fabric.print(hparams)
     # checks if the checkpoint is correct
     check_valid_checkpoint_dir(checkpoint_dir)
     # something that checks the speed of the training
@@ -182,6 +184,11 @@ def train(
     out_dir: Path,
     speed_monitor: SpeedMonitor,
 ) -> None:
+    # tensorboard
+    current_datetime = datetime.now()
+    formatted_datetime = current_datetime.strftime('%d_%m_%Y-%H-%M')
+
+    tb: TensorBoardLogger = TensorBoardLogger("tb", name=formatted_datetime, flush_secs=1)
     tokenizer = Tokenizer(checkpoint_dir)
     max_seq_length, longest_seq_length, longest_seq_ix = get_max_seq_length(train_data)
 
@@ -210,7 +217,7 @@ def train(
         import torch_xla.core.xla_model as xm
 
         xm.mark_step()
-    for iter_num in range(max_iters):
+    for iter_num in trange(max_iters):
         if step_count <= warmup_steps:
             # linear warmup
             lr = learning_rate * step_count / warmup_steps
@@ -249,10 +256,18 @@ def train(
             lengths=total_lengths,
         )
         if iter_num % log_interval == 0:
-            fabric.print(
-                f"iter {iter_num} step {step_count}: loss {loss.item():.4f}, iter time:"
-                f" {(t1 - iter_t0) * 1000:.2f}ms{' (optimizer.step)' if not is_accumulating else ''}"
+            # fabric.print(
+            #     f"iter {iter_num} step {step_count}: loss {loss.item():.4f}, iter time:"
+            #     f" {(t1 - iter_t0) * 1000:.2f}ms{' (optimizer.step)' if not is_accumulating else ''}"
+            # )
+            tb.log_metrics(
+                {
+                    "loss/train":loss.item(),
+                    "time": (t1 - iter_t0)*1000
+                    },
+                iter_num
             )
+            
 
         if not is_accumulating and step_count % eval_interval == 0:
             t0 = time.perf_counter()
@@ -261,6 +276,13 @@ def train(
             speed_monitor.eval_end(t1)
             fabric.print(f"step {iter_num}: val loss {val_loss:.4f}, val time: {t1 * 1000:.2f}ms")
             fabric.barrier()
+            tb.log_metrics(
+                {
+                    "loss/val":val_loss,
+                    "time": (t1 - iter_t0)*1000
+                    },
+                iter_num
+            )
         if not is_accumulating and step_count % save_interval == 0:
             checkpoint_path = out_dir / f"iter-{iter_num:06d}-ckpt.pth"
             save_lora_checkpoint(fabric, model, checkpoint_path)
@@ -341,9 +363,9 @@ def get_max_seq_length(data: List[Dict]) -> Tuple[int, int, int]:
     )
 
 
-def save_lora_checkpoint(fabric, model, file_path: Path):
+def save_lora_checkpoint(fabric : L.Fabric, model, file_path: Path):
     fabric.print(f"Saving LoRA weights to {str(file_path)!r}")
-    fabric.save(file_path, {"model": model}, filter={"model": lora_filter})
+    fabric.save(file_path, dict({"model": model}, filter={"model": lora_filter}))
 
 
 if __name__ == "__main__":
