@@ -13,5 +13,6 @@ data
 checkpoints
 out
 wandb
+try_sql_dataset.ipynb
 
 tests/original_falcon_40b.py

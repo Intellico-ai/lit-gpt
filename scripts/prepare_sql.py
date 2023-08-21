@@ -19,7 +19,7 @@ from lit_gpt.tokenizer import Tokenizer
 DATA_FILE_URL = ""
 DATA_FILE_NAME = "sql-create-context.json"
 DESTINATION_PATH = Path("data/sql-create-context")
-CHECKPOINT_DIR = Path("checkpoints/stabilityai/stablelm-base-alpha-3b")
+CHECKPOINT_DIR = Path("checkpoints/meta-llama/Llama-2-7b-hf/")
 TEST_SPLIT_FRACTION = 0.10  
 IGNORE_INDEX = -1
 MASK_INPUTS = False  # as in alpaca-lora
@@ -42,6 +42,11 @@ def prepare(
     The output is a training and test dataset saved as `train.pt` and `test.pt`,
     which stores the preprocessed and tokenized prompts and labels.
     """
+    """Prepare the SQL dataset for instruction tuning.
+
+    The output is a training and test dataset saved as `train.pt` and `test.pt`,
+    which stores the preprocessed and tokenized prompts and labels.
+    """
     with open(checkpoint_dir / "lit_config.json", "r") as file:
         config = json.load(file)
         max_seq_length = config["block_size"]
@@ -54,7 +59,6 @@ def prepare(
     
     destination_path.mkdir(parents=True, exist_ok=True)
     data_file_path = destination_path / data_file_name
-    
     
     # download_if_missing(data_file_path, data_file_url)
     # with open(data_file_path, "r", encoding="utf-8") as file:
@@ -71,7 +75,6 @@ def prepare(
 
     print(f"train has {len(train_set):,} samples")
     print(f"test has {len(test_set):,} samples")
-
     print("Processing train split ...")
     train_set = [
         prepare_sample(
@@ -84,7 +87,6 @@ def prepare(
         for sample in tqdm(train_set)
     ]
     torch.save(train_set, destination_path / "train.pt")
-
     print("Processing test split ...")
     test_set = [
         prepare_sample(
