@@ -4,7 +4,7 @@ Based on the nanoGPT implementation: https://github.com/karpathy/nanoGPT and
 https://github.com/EleutherAI/gpt-neox/tree/main/megatron/model.
 """
 import math
-from typing import List, Optional, Tuple, Any
+from typing import Any, List, Optional, Tuple
 
 import torch
 import torch.nn as nn
@@ -12,7 +12,6 @@ from lightning_utilities.core.imports import RequirementCache
 from typing_extensions import Self
 
 from lit_gpt.config import Config
-from lit_gpt.rmsnorm import RMSNorm
 
 RoPECache = Tuple[torch.Tensor, torch.Tensor]
 KVCache = Tuple[torch.Tensor, torch.Tensor]
@@ -39,19 +38,13 @@ class GPT(nn.Module):
         self.kv_caches: List[KVCache] = []
 
     def _init_weights(self, module: nn.Module) -> None:
+        """Meant to be used with `gpt.apply(gpt._init_weights)`."""
         if isinstance(module, nn.Linear):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
             if module.bias is not None:
                 torch.nn.init.zeros_(module.bias)
         elif isinstance(module, nn.Embedding):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
-        elif isinstance(module, nn.LayerNorm):
-            torch.nn.init.ones_(module.weight)
-            torch.nn.init.zeros_(module.bias)
-            module.eps = self.config.norm_eps
-        elif isinstance(module, RMSNorm):
-            torch.nn.init.ones_(module.weight)
-            module.eps = self.config.norm_eps
 
     def reset_cache(self) -> None:
         self.kv_caches.clear()
@@ -216,12 +209,12 @@ class CausalSelfAttention(nn.Module):
         # repeat k and v if necessary
         if self.config.n_query_groups != 1:  # doing this would require a full kv cache with MQA (inefficient!)
             # for MHA this is a no-op
-            k = k.repeat_interleave(q_per_kv, dim=2)
-            v = v.repeat_interleave(q_per_kv, dim=2)
+            k = k.expand(B, self.config.n_query_groups, q_per_kv, T, self.config.head_size)
+            v = v.expand(B, self.config.n_query_groups, q_per_kv, T, self.config.head_size)
 
         q = q.reshape(B, -1, T, self.config.head_size)  # (B, nh_q, T, hs)
-        k = k.view(B, -1, T, self.config.head_size)  # (B, nh_k, T, hs)
-        v = v.view(B, -1, T, self.config.head_size)  # (B, nh_v, T, hs)
+        k = k.reshape(B, -1, T, self.config.head_size)  # (B, nh_k, T, hs)
+        v = v.reshape(B, -1, T, self.config.head_size)  # (B, nh_v, T, hs)
 
         n_elem = int(self.config.rotary_percentage * self.config.head_size)
 
@@ -246,7 +239,7 @@ class CausalSelfAttention(nn.Module):
 
         y = self.scaled_dot_product_attention(q, k, v, mask=mask)
 
-        y = y.transpose(1, 2).contiguous().view(B, T, C)  # re-assemble all head outputs side by side
+        y = y.reshape(B, T, C)  # re-assemble all head outputs side by side
 
         # output projection
         y = self.proj(y)
@@ -269,10 +262,11 @@ class CausalSelfAttention(nn.Module):
             q = q.transpose(1, 2)
             k = k.transpose(1, 2)
             v = v.transpose(1, 2)
-            return flash_attn_func(q, k, v, dropout_p=0.0, softmax_scale=scale, causal=True).transpose(1, 2)
-        return torch.nn.functional.scaled_dot_product_attention(
+            return flash_attn_func(q, k, v, dropout_p=0.0, softmax_scale=scale, causal=True)
+        y = torch.nn.functional.scaled_dot_product_attention(
             q, k, v, attn_mask=mask, dropout_p=0.0, scale=scale, is_causal=mask is None
         )
+        return y.transpose(1, 2)
 
 
 class GptNeoxMLP(nn.Module):
