@@ -15,10 +15,9 @@ sys.path.append(str(wd))
 from generate.base import generate
 from lit_gpt.lora import mark_only_lora_as_trainable, lora_filter, GPT, Config, Block
 from lit_gpt.tokenizer import Tokenizer
-from lit_gpt.utils import lazy_load, check_valid_checkpoint_dir, step_csv_logger, chunked_cross_entropy
+from lit_gpt.utils import lazy_load, check_valid_checkpoint_dir, step_csv_logger, chunked_cross_entropy, quantization
 from lit_gpt.speed_monitor import SpeedMonitorFabric as SpeedMonitor, measure_flops, estimate_flops
 from scripts.prepare_alpaca import generate_prompt
-
 
 eval_interval = 100
 save_interval = 100
@@ -82,21 +81,25 @@ def setup(
 
 
 def main(fabric: L.Fabric, data_dir: Path, checkpoint_dir: Path, out_dir: Path):
+    # prints hparams
     fabric.print(hparams)
+    # checks if the checkpoint is correct
     check_valid_checkpoint_dir(checkpoint_dir)
-
+    # something that checks the speed of the training
     speed_monitor = SpeedMonitor(fabric, window_size=50, time_unit="seconds")
 
     fabric.seed_everything(1337)  # same seed for every process to init model (FSDP)
 
     if fabric.global_rank == 0:
         os.makedirs(out_dir, exist_ok=True)
-
+    # load train and val data from data_dir
     train_data = torch.load(data_dir / "train.pt")
     val_data = torch.load(data_dir / "test.pt")
 
+    # tells where lora is put
     if not any((lora_query, lora_key, lora_value, lora_projection, lora_mlp, lora_head)):
         fabric.print("Warning: all LoRA layers are disabled!")
+    # creates a configuration given all the values at the beginning of this file
     config = Config.from_name(
         name=checkpoint_dir.name,
         r=lora_r,
@@ -111,15 +114,22 @@ def main(fabric: L.Fabric, data_dir: Path, checkpoint_dir: Path, out_dir: Path):
     )
     checkpoint_path = checkpoint_dir / "lit_model.pth"
     fabric.print(f"Loading model {str(checkpoint_path)!r} with {config.__dict__}")
+    # i added the quantization, but it doesnt work
+    # --------------
+    # ERROR:  File "/home/ubuntu/lit-parrot/lit_gpt/rmsnorm.py", line 19, in forward
+    # norm_x = torch.mean(x * x, dim=self.dim, keepdim=True)
+    # RuntimeError: CUDA error: device-side assert triggered
+    # with fabric.init_module(empty_init=False), quantization("bnb.nf4"):
+    # --------------
     with fabric.init_module(empty_init=False):
         model = GPT(config)
         model.apply(model._init_weights)  # for the LoRA weights
+    # load original weights
     with lazy_load(checkpoint_path) as checkpoint:
         # strict=False because missing keys due to LoRA weights not contained in state dict
         model.load_state_dict(checkpoint, strict=False)
-
+    # freezes big model
     mark_only_lora_as_trainable(model)
-
     trainable_params = [p for p in model.parameters() if p.requires_grad]
     num_params = sum(p.numel() for p in trainable_params)
     fabric.print(f"Number of trainable parameters: {num_params:,}")
