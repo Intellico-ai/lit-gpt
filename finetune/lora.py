@@ -32,21 +32,24 @@ from lightning.pytorch.loggers import TensorBoardLogger
 from datetime import datetime
 from tqdm import tqdm, trange
     
-eval_interval = 100
-save_interval = 100
-eval_iters = 100
-log_interval = 1
+    
+batch_size = 128
+micro_batch_size = 4 # i dont know what happens if it's not divisible
+eval_interval = 5 # evaluate every eval_interval batch
+save_interval = 200 # save every eval_interval batch
+eval_iters = 100 # how many sample for validation are extracted (100*micro_batch_size)
+log_interval = 1 # every tot iterations the training metrics are evaluated
 devices = 1
 # change this value to force a maximum sequence length
 override_max_seq_length = None
 
 # Hyperparameters
 learning_rate = 3e-4
-batch_size = 128
-micro_batch_size = 4
+
+TEMPERATURE = 0.1
 gradient_accumulation_iters = batch_size // micro_batch_size
 assert gradient_accumulation_iters > 0
-max_iters = 5000  # train dataset size
+max_iters = 20000 # number of microbatch processed
 weight_decay = 0.01
 lora_r = 8
 lora_alpha = 16
@@ -188,7 +191,7 @@ def train(
     current_datetime = datetime.now()
     formatted_datetime = current_datetime.strftime('%d_%m_%Y-%H-%M')
 
-    tb: TensorBoardLogger = TensorBoardLogger("tb", name=formatted_datetime, flush_secs=1)
+    tb: TensorBoardLogger = TensorBoardLogger("tb", name=f"LoRA_{formatted_datetime}", flush_secs=1)
     tokenizer = Tokenizer(checkpoint_dir)
     max_seq_length, longest_seq_length, longest_seq_ix = get_max_seq_length(train_data)
 
@@ -217,7 +220,9 @@ def train(
         import torch_xla.core.xla_model as xm
 
         xm.mark_step()
-    for iter_num in trange(max_iters):
+        
+    iters_progress_bar = trange(max_iters)
+    for iter_num in iters_progress_bar:
         if step_count <= warmup_steps:
             # linear warmup
             lr = learning_rate * step_count / warmup_steps
@@ -242,6 +247,7 @@ def train(
             optimizer.step()
             optimizer.zero_grad()
             step_count += 1
+            iters_progress_bar.set_description(f"Opt Step {step_count}, Iter {iter_num}")
         elif fabric.device.type == "xla":
             xm.mark_step()
 
@@ -260,15 +266,16 @@ def train(
             #     f"iter {iter_num} step {step_count}: loss {loss.item():.4f}, iter time:"
             #     f" {(t1 - iter_t0) * 1000:.2f}ms{' (optimizer.step)' if not is_accumulating else ''}"
             # )
+            for param_group in optimizer.param_groups:
+                learning_rate = param_group["lr"]
             tb.log_metrics(
                 {
                     "loss/train":loss.item(),
-                    "time": (t1 - iter_t0)*1000
+                    "optim/lr":learning_rate
                     },
                 iter_num
             )
             
-
         if not is_accumulating and step_count % eval_interval == 0:
             t0 = time.perf_counter()
             val_loss = validate(fabric, model, val_data, tokenizer, longest_seq_length)
@@ -276,10 +283,10 @@ def train(
             speed_monitor.eval_end(t1)
             fabric.print(f"step {iter_num}: val loss {val_loss:.4f}, val time: {t1 * 1000:.2f}ms")
             fabric.barrier()
+            learning_rate : float = 1.
             tb.log_metrics(
                 {
                     "loss/val":val_loss,
-                    "time": (t1 - iter_t0)*1000
                     },
                 iter_num
             )
@@ -303,14 +310,15 @@ def validate(
     val_loss = losses.mean()
 
     # produce an example:
-    instruction = "Recommend a movie for me to watch during the weekend and explain the reason."
+    instruction = "How many heads of the departments are older than 56 ?"
+    input_string = 	"CREATE TABLE head (age INTEGER)"
     fabric.print(instruction)
-    sample = {"instruction": instruction, "input": ""}
+    sample = {"instruction": instruction, "input": input_string}
     prompt = generate_prompt(sample)
     encoded = tokenizer.encode(prompt, device=fabric.device)
     max_returned_tokens = len(encoded) + 100
     output = generate(
-        model, idx=encoded, max_returned_tokens=max_returned_tokens, max_seq_length=max_returned_tokens, temperature=0.8
+        model, idx=encoded, max_returned_tokens=max_returned_tokens, max_seq_length=max_returned_tokens, temperature=TEMPERATURE
     )
     output = tokenizer.decode(output)
     fabric.print(output)
@@ -365,6 +373,7 @@ def get_max_seq_length(data: List[Dict]) -> Tuple[int, int, int]:
 
 def save_lora_checkpoint(fabric : L.Fabric, model, file_path: Path):
     fabric.print(f"Saving LoRA weights to {str(file_path)!r}")
+    # i had to change this ooterwhise it doesnt work
     fabric.save(file_path, dict({"model": model}, filter={"model": lora_filter}))
 
 
