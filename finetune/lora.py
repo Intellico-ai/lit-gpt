@@ -2,7 +2,7 @@ import os
 import sys
 import time
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Literal, Optional, Tuple
 
 import lightning as L
 import torch
@@ -23,6 +23,7 @@ from lit_gpt.utils import (
     get_default_supported_precision,
     lazy_load,
     num_parameters,
+    quantization,
     step_csv_logger,
 )
 from scripts.prepare_alpaca import generate_prompt
@@ -63,11 +64,17 @@ def setup(
     out_dir: Path = Path("out/lora/alpaca"),
     precision: Optional[str] = None,
     tpu: bool = False,
+    quantize: Optional[Literal["bnb.nf4", "bnb.nf4-dq", "bnb.fp4", "bnb.fp4-dq"]] = None,
 ):
     precision = precision or get_default_supported_precision(training=True, tpu=tpu)
 
     fabric_devices = devices
     if fabric_devices > 1:
+        if quantize:
+            raise NotImplementedError(
+                "Quantization is currently not supported for multi-GPU training. "
+                "Please set devices=1 when using the --quantization flag."
+            )
         if tpu:
             # For multi-host TPU training, the device count for Fabric is limited to the count on a single host.
             fabric_devices = "auto"
@@ -85,13 +92,10 @@ def setup(
     logger = step_csv_logger(out_dir.parent, out_dir.name, flush_logs_every_n_steps=log_interval)
     fabric = L.Fabric(devices=fabric_devices, strategy=strategy, precision=precision, loggers=logger)
     fabric.print(hparams)
-    fabric.launch(main, data_dir, checkpoint_dir, out_dir)
+    fabric.launch(main, data_dir, checkpoint_dir, out_dir, quantize)
 
 
-def main(fabric: L.Fabric, data_dir: Path, checkpoint_dir: Path, out_dir: Path):
-    # prints hparams
-    fabric.print(hparams)
-    # checks if the checkpoint is correct
+def main(fabric: L.Fabric, data_dir: Path, checkpoint_dir: Path, out_dir: Path, quantize: Optional[str] = None):
     check_valid_checkpoint_dir(checkpoint_dir)
     # something that checks the speed of the training
     speed_monitor = SpeedMonitor(fabric, window_size=50, time_unit="seconds")
@@ -129,7 +133,7 @@ def main(fabric: L.Fabric, data_dir: Path, checkpoint_dir: Path, out_dir: Path):
     # RuntimeError: CUDA error: device-side assert triggered
     # with fabric.init_module(empty_init=False), quantization("bnb.nf4"):
     # --------------
-    with fabric.init_module(empty_init=False):
+    with fabric.init_module(empty_init=False), quantization(quantize):
         model = GPT(config)
         model.apply(model._init_weights)  # for the LoRA weights
     # load original weights
@@ -143,7 +147,12 @@ def main(fabric: L.Fabric, data_dir: Path, checkpoint_dir: Path, out_dir: Path):
     fabric.print(f"Number of non trainable parameters: {num_parameters(model, requires_grad=False):,}")
     trainable_params = [p for p in model.parameters() if p.requires_grad]
 
-    optimizer = torch.optim.AdamW(trainable_params, lr=learning_rate, weight_decay=weight_decay)
+    if quantize and quantize.startswith("bnb."):
+        import bitsandbytes as bnb
+
+        optimizer = bnb.optim.PagedAdamW(trainable_params, lr=learning_rate, weight_decay=weight_decay)
+    else:
+        optimizer = torch.optim.AdamW(trainable_params, lr=learning_rate, weight_decay=weight_decay)
     model, optimizer = fabric.setup(model, optimizer)
 
     fabric.seed_everything(1337 + fabric.global_rank)
