@@ -7,6 +7,7 @@ from typing import Dict, List, Literal, Optional, Tuple
 import lightning as L
 import torch
 from lightning.fabric.strategies import FSDPStrategy, XLAStrategy
+import torch.optim.lr_scheduler as lr_scheduler
 
 # support running without installing as a package
 wd = Path(__file__).parent.parent.resolve()
@@ -32,6 +33,18 @@ from lightning.pytorch.loggers import TensorBoardLogger
 from datetime import datetime
 from tqdm import tqdm, trange
 
+# default configuration of llama, maybe they are not right for the small amount, i'll do 2 different tries
+LLAMA_CONFIG = dict(
+    beta1=0.9,
+    bera2=0.95,
+    adam_eps=1e-5,
+    warmup_steps=2000,
+    lr_decay_perc=0.1,
+    weight_decay=0.1,
+    gradient_clipping=1,
+    lr=2e-5,
+)
+USE_LLAMA_CONFIG = True
 
 batch_size = 128
 micro_batch_size = 4  # i dont know what happens if it's not divisible
@@ -42,6 +55,7 @@ log_interval = 1  # every tot iterations the training metrics are evaluated
 devices = 1
 # change this value to force a maximum sequence length
 override_max_seq_length = None
+clip_grad_value = 1
 
 # Hyperparameters
 learning_rate = 3e-4
@@ -154,19 +168,52 @@ def main(fabric: L.Fabric, data_dir: Path, checkpoint_dir: Path, out_dir: Path, 
     fabric.print(f"Number of trainable parameters: {num_parameters(model, requires_grad=True):,}")
     fabric.print(f"Number of non trainable parameters: {num_parameters(model, requires_grad=False):,}")
     trainable_params = [p for p in model.parameters() if p.requires_grad]
-
+    max_steps = max_iters//micro_batch_size
     if quantize and quantize.startswith("bnb."):
         import bitsandbytes as bnb
 
-        optimizer = bnb.optim.PagedAdamW(trainable_params, lr=learning_rate, weight_decay=weight_decay)
+        if USE_LLAMA_CONFIG:
+            llama_lr = LLAMA_CONFIG["lr"]
+            llama_lr_perc = LLAMA_CONFIG["lr_decay_perc"]
+            optimizer = bnb.optim.PagedAdamW(
+                trainable_params,
+                lr=LLAMA_CONFIG["lr"],
+                weight_decay=LLAMA_CONFIG["weight_decay"],
+                betas=(LLAMA_CONFIG["beta1"], LLAMA_CONFIG["beta2"]),
+                eps=LLAMA_CONFIG["adam_eps"],
+            )
+            scheduler = lr_scheduler.CosineAnnealingLR(optimizer, T_max=max_steps-warmup_steps, eta_min=llama_lr * llama_lr_perc)
+
+        else:
+            optimizer = bnb.optim.PagedAdamW(trainable_params, lr=learning_rate, weight_decay=weight_decay)
+            scheduler = lr_scheduler.ReduceLROnPlateau(optimizer, mode="min", factor=0.1, patience=10)
     else:
-        optimizer = torch.optim.AdamW(trainable_params, lr=learning_rate, weight_decay=weight_decay)
+        if USE_LLAMA_CONFIG:
+            llama_lr = LLAMA_CONFIG["lr"]
+            llama_lr_perc = LLAMA_CONFIG["lr_decay_perc"]
+            optimizer = torch.optim.AdamW(
+                trainable_params,
+                lr=LLAMA_CONFIG["lr"],
+                weight_decay=LLAMA_CONFIG["weight_decay"],
+                betas=(LLAMA_CONFIG["beta1"], LLAMA_CONFIG["beta2"]),
+                eps=LLAMA_CONFIG["adam_eps"],
+            )
+
+            scheduler = lr_scheduler.CosineAnnealingLR(optimizer, T_max=max_steps-warmup_steps, eta_min=llama_lr * llama_lr_perc)
+        else:
+            optimizer = torch.optim.AdamW(trainable_params, lr=learning_rate, weight_decay=weight_decay)
+            scheduler = lr_scheduler.ReduceLROnPlateau(optimizer, mode="min", factor=0.1, patience=10)
+
+    assert isinstance(
+        scheduler, (torch.optim.lr_scheduler.ReduceLROnPlateau, torch.optim.lr_scheduler.CosineAnnealingLR)
+    ), f"Scheduler is of type {type(scheduler)}, not ReduceLROnPlateau or CosineAnnealingLR"
+
     model, optimizer = fabric.setup(model, optimizer)
 
     fabric.seed_everything(1337 + fabric.global_rank)
 
     train_time = time.perf_counter()
-    train(fabric, model, optimizer, train_data, val_data, checkpoint_dir, out_dir, speed_monitor)
+    train(fabric, model, optimizer, train_data, val_data, checkpoint_dir, out_dir, speed_monitor, scheduler)
     fabric.print(f"Training time: {(time.perf_counter()-train_time):.2f}s")
     if fabric.device.type == "cuda":
         fabric.print(f"Memory used: {torch.cuda.max_memory_allocated() / 1e9:.02f} GB")
@@ -185,6 +232,7 @@ def train(
     checkpoint_dir: Path,
     out_dir: Path,
     speed_monitor: SpeedMonitor,
+    scheduler: Optional[lr_scheduler._LRScheduler] = None
 ) -> None:
     # tensorboard
     current_datetime = datetime.now()
@@ -243,9 +291,18 @@ def train(
             fabric.backward(loss / gradient_accumulation_iters)
 
         if not is_accumulating:
+            if USE_LLAMA_CONFIG:
+                fabric.clip_gradients(model, clip_norm=LLAMA_CONFIG["gradient_clipping"])
+            else:
+                fabric.clip_gradients(model, clip_norm=clip_grad_value)
+
             optimizer.step()
             optimizer.zero_grad()
+            # if cosine scheduler and not warmup, apply schedule
             step_count += 1
+            # cosine scheduler does this only if not in warmup
+            if step_count >= warmup_steps and isinstance(scheduler, lr_scheduler.CosineAnnealingLR):
+                scheduler.step()
             iters_progress_bar.set_description(f"Opt Step {step_count}, Iter {iter_num}")
         elif fabric.device.type == "xla":
             xm.mark_step()
@@ -282,6 +339,9 @@ def train(
                 },
                 iter_num,
             )
+            if step_count >= warmup_steps and isinstance(scheduler, lr_scheduler.ReduceLROnPlateau):
+                scheduler.step(val_loss)
+                
         if not is_accumulating and step_count % save_interval == 0:
             checkpoint_path = out_dir / f"iter-{iter_num:06d}-ckpt.pth"
             save_lora_checkpoint(fabric, model, checkpoint_path)

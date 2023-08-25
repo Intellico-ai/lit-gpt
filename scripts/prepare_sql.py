@@ -188,8 +188,8 @@ def generate_prompt(example):
             " {sql_context}\n{user_request} [/INST]"
         )
 
-        sql_create_context = example["input"]
-        user_request = example["instruction"]
+        sql_create_context = example["input"].strip()
+        user_request = example["instruction"].strip()
         formatted_string = template.format(
             system_prompt=system_prompt_unsafe, sql_context=sql_create_context, user_request=user_request
         )
