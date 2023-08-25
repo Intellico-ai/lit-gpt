@@ -156,37 +156,31 @@ def generate_prompt(example):
     """Generates a standardized message to prompt the model with an instruction, optional input and a
     'response' field."""
 
-    if example["input"]:
-        template = "<s>[INST] <<SYS>>\n{system_prompt}<</SYS>>{user_message} [/INST]"
-
-        
-        system_prompt = (
-            "You are a helpful, respectful and honest assistant. Always answer as helpfully as possible, while being"
-            " safe.  Your answers should not include any harmful, unethical, racist, sexist, toxic, dangerous, or"
-            " illegal content. Please ensure that your responses are socially unbiased and positive in nature. You are"
-            " an expert SQL programmer, you can produce efficient and correct SQL code. The user will generally give"
-            " you a context, which consist in table that compose the SQL database, and than a query. Respond truthfully"
-            " and be concise."
-        )
-        sql_create_context = "The SQL database is composed by the following tables:"
-        prompt_input = "<s>[INST] <<SYS>>\n{system_prompt}<</SYS>>"
-        prompt_no_imput = ""
-
-    if example["input"]:
-        return (
-            "You are a helpful, respectful and honest assistant. Always answer as helpfully as possible, while being"
-            " safe.  Your answers should not include any harmful, unethical, racist, sexist, toxic, dangerous, or"
-            " illegal content. Please ensure that your responses are socially unbiased and positive in nature.Below is"
-            " an instruction that describes a task, paired with an input that provides further context. Write a"
-            f" response that appropriately completes the request.\n\n### Instruction:\n{example['instruction']}\n\n###"
-            f" Input:\n{example['input']}\n\n### Response:"
-        )
-    return (
-        "Below is an instruction that describes a task. "
-        "Write a response that appropriately completes the request.\n\n"
-        f"### Instruction:\n{example['instruction']}\n\n### Response:"
+    system_prompt = (
+        "You are a helpful, respectful and honest assistant. Always answer as helpfully as possible, while being"
+        " safe.  Your answers should not include any harmful, unethical, racist, sexist, toxic, dangerous, or"
+        " illegal content. Please ensure that your responses are socially unbiased and positive in nature. You are"
+        " an expert SQL programmer, you can produce efficient and correct SQL code. The user will generally give"
+        " you a context, which consist in table that compose the SQL database, and than a query. The SQL context"
+        " can vary during the conversation, therefore the query that you will generate must consider all the"
+        " changes in the database that you have been toldRespond truthfully and be concise. "
     )
+    if example["input"]:
+        template = (
+            "[INST] <<SYS>>\n{system_prompt}\n<</SYS>>\n\nThe SQL database is composed by the following sql tables:"
+            " {sql_context}\n{user_request} [/INST]"
+        )
 
+
+        sql_create_context = example["input"]
+        user_request= example["instruction"]
+        formatted_string = template.format(system_prompt=system_prompt, sql_context=sql_create_context, user_request=user_request)
+        return formatted_string
+    else:
+        template = "[INST] <<SYS>>\n{system_prompt}\n<</SYS>>\n\n{user_request} [/INST]"
+        user_request= example["instruction"]
+        formatted_string = template.format(system_prompt=system_prompt, user_request=user_request)
+        return formatted_string
 
 if __name__ == "__main__":
     from jsonargparse import CLI
