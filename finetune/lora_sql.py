@@ -34,9 +34,9 @@ from datetime import datetime
 from tqdm import tqdm, trange
 
 # default configuration of llama, maybe they are not right for the small amount, i'll do 2 different tries
-LLAMA_CONFIG = dict(
+LLAMA_HYPER_CONFIG = dict(
     beta1=0.9,
-    bera2=0.95,
+    beta2=0.95,
     adam_eps=1e-5,
     warmup_steps=2000,
     lr_decay_perc=0.1,
@@ -44,11 +44,14 @@ LLAMA_CONFIG = dict(
     gradient_clipping=1,
     lr=2e-5,
 )
-USE_LLAMA_CONFIG = True
+USE_LLAMA_HYPER_CONFIG = True
 
 batch_size = 128
-micro_batch_size = 4  # i dont know what happens if it's not divisible
-eval_interval = 5  # evaluate every eval_interval batch
+# batch_size = 4
+# micro_batch_size = 2  # i dont know what happens if it's not divisible
+micro_batch_size = 2
+n_microb_in_b = batch_size // micro_batch_size
+eval_interval = 1 # evaluate every eval_interval batch
 save_interval = 200  # save every eval_interval batch
 eval_iters = 100  # how many sample for validation are extracted (100*micro_batch_size)
 log_interval = 1  # every tot iterations the training metrics are evaluated
@@ -63,9 +66,12 @@ learning_rate = 3e-4
 TEMPERATURE = 0.1
 gradient_accumulation_iters = batch_size // micro_batch_size
 assert gradient_accumulation_iters > 0
-max_iters = 20000  # number of microbatch processed
+# max_iters = 40000  # number of microbatch processed
+max_iters = 40000
+max_steps = max_iters // n_microb_in_b // eval_interval
 weight_decay = 0.01
-lora_r = 8
+# lora_r = 8
+lora_r = 4
 lora_alpha = 16
 lora_dropout = 0.05
 lora_query = True
@@ -73,7 +79,7 @@ lora_key = True
 lora_value = True
 lora_projection = True
 lora_mlp = True
-lora_head = True
+lora_head = False
 warmup_steps = 100
 
 hparams = {k: v for k, v in locals().items() if isinstance(v, (int, float, str)) and not k.startswith("_")}
@@ -146,6 +152,7 @@ def main(fabric: L.Fabric, data_dir: Path, checkpoint_dir: Path, out_dir: Path, 
         to_mlp=lora_mlp,
         to_head=lora_head,
     )
+
     checkpoint_path = checkpoint_dir / "lit_model.pth"
     fabric.print(f"Loading model {str(checkpoint_path)!r} with {config.__dict__}")
     # i added the quantization, but it doesnt work
@@ -168,38 +175,42 @@ def main(fabric: L.Fabric, data_dir: Path, checkpoint_dir: Path, out_dir: Path, 
     fabric.print(f"Number of trainable parameters: {num_parameters(model, requires_grad=True):,}")
     fabric.print(f"Number of non trainable parameters: {num_parameters(model, requires_grad=False):,}")
     trainable_params = [p for p in model.parameters() if p.requires_grad]
-    max_steps = max_iters//micro_batch_size
+    max_steps = max_iters // micro_batch_size
     if quantize and quantize.startswith("bnb."):
         import bitsandbytes as bnb
 
-        if USE_LLAMA_CONFIG:
-            llama_lr = LLAMA_CONFIG["lr"]
-            llama_lr_perc = LLAMA_CONFIG["lr_decay_perc"]
+        if USE_LLAMA_HYPER_CONFIG:
+            llama_lr = LLAMA_HYPER_CONFIG["lr"]
+            llama_lr_perc = LLAMA_HYPER_CONFIG["lr_decay_perc"]
             optimizer = bnb.optim.PagedAdamW(
                 trainable_params,
-                lr=LLAMA_CONFIG["lr"],
-                weight_decay=LLAMA_CONFIG["weight_decay"],
-                betas=(LLAMA_CONFIG["beta1"], LLAMA_CONFIG["beta2"]),
-                eps=LLAMA_CONFIG["adam_eps"],
+                lr=LLAMA_HYPER_CONFIG["lr"],
+                weight_decay=LLAMA_HYPER_CONFIG["weight_decay"],
+                betas=(LLAMA_HYPER_CONFIG["beta1"], LLAMA_HYPER_CONFIG["beta2"]),
+                eps=LLAMA_HYPER_CONFIG["adam_eps"],
             )
-            scheduler = lr_scheduler.CosineAnnealingLR(optimizer, T_max=max_steps-warmup_steps, eta_min=llama_lr * llama_lr_perc)
+            scheduler = lr_scheduler.CosineAnnealingLR(
+                optimizer, T_max=max_steps - warmup_steps, eta_min=llama_lr * llama_lr_perc
+            )
 
         else:
             optimizer = bnb.optim.PagedAdamW(trainable_params, lr=learning_rate, weight_decay=weight_decay)
             scheduler = lr_scheduler.ReduceLROnPlateau(optimizer, mode="min", factor=0.1, patience=10)
     else:
-        if USE_LLAMA_CONFIG:
-            llama_lr = LLAMA_CONFIG["lr"]
-            llama_lr_perc = LLAMA_CONFIG["lr_decay_perc"]
+        if USE_LLAMA_HYPER_CONFIG:
+            llama_lr = LLAMA_HYPER_CONFIG["lr"]
+            llama_lr_perc = LLAMA_HYPER_CONFIG["lr_decay_perc"]
             optimizer = torch.optim.AdamW(
                 trainable_params,
-                lr=LLAMA_CONFIG["lr"],
-                weight_decay=LLAMA_CONFIG["weight_decay"],
-                betas=(LLAMA_CONFIG["beta1"], LLAMA_CONFIG["beta2"]),
-                eps=LLAMA_CONFIG["adam_eps"],
+                lr=LLAMA_HYPER_CONFIG["lr"],
+                weight_decay=LLAMA_HYPER_CONFIG["weight_decay"],
+                betas=(LLAMA_HYPER_CONFIG["beta1"], LLAMA_HYPER_CONFIG["beta2"]),
+                eps=LLAMA_HYPER_CONFIG["adam_eps"],
             )
 
-            scheduler = lr_scheduler.CosineAnnealingLR(optimizer, T_max=max_steps-warmup_steps, eta_min=llama_lr * llama_lr_perc)
+            scheduler = lr_scheduler.CosineAnnealingLR(
+                optimizer, T_max=max_steps - warmup_steps, eta_min=llama_lr * llama_lr_perc
+            )
         else:
             optimizer = torch.optim.AdamW(trainable_params, lr=learning_rate, weight_decay=weight_decay)
             scheduler = lr_scheduler.ReduceLROnPlateau(optimizer, mode="min", factor=0.1, patience=10)
@@ -232,7 +243,7 @@ def train(
     checkpoint_dir: Path,
     out_dir: Path,
     speed_monitor: SpeedMonitor,
-    scheduler: Optional[lr_scheduler._LRScheduler] = None
+    scheduler: Optional[lr_scheduler._LRScheduler] = None,
 ) -> None:
     # tensorboard
     current_datetime = datetime.now()
@@ -291,10 +302,10 @@ def train(
             fabric.backward(loss / gradient_accumulation_iters)
 
         if not is_accumulating:
-            if USE_LLAMA_CONFIG:
-                fabric.clip_gradients(model, clip_norm=LLAMA_CONFIG["gradient_clipping"])
+            if USE_LLAMA_HYPER_CONFIG:
+                fabric.clip_gradients(model, optimizer, max_norm=LLAMA_HYPER_CONFIG["gradient_clipping"])
             else:
-                fabric.clip_gradients(model, clip_norm=clip_grad_value)
+                fabric.clip_gradients(model, optimizer, max_norm=clip_grad_value)
 
             optimizer.step()
             optimizer.zero_grad()
@@ -341,7 +352,7 @@ def train(
             )
             if step_count >= warmup_steps and isinstance(scheduler, lr_scheduler.ReduceLROnPlateau):
                 scheduler.step(val_loss)
-                
+
         if not is_accumulating and step_count % save_interval == 0:
             checkpoint_path = out_dir / f"iter-{iter_num:06d}-ckpt.pth"
             save_lora_checkpoint(fabric, model, checkpoint_path)
