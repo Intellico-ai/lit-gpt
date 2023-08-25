@@ -26,7 +26,7 @@ from lit_gpt.utils import (
     quantization,
     step_csv_logger,
 )
-from scripts.prepare_alpaca import generate_prompt
+from scripts.prepare_sql import generate_prompt
 
 from lightning.pytorch.loggers import TensorBoardLogger
 from datetime import datetime

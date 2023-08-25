@@ -20,11 +20,12 @@ DATA_FILE_URL = ""
 DATA_FILE_NAME = "sql-create-context.json"
 DESTINATION_PATH = Path("data/sql-create-context")
 CHECKPOINT_DIR = Path("checkpoints/meta-llama/Llama-2-7b-chat-hf/")
-TEST_SPLIT_FRACTION = 0.10  
+TEST_SPLIT_FRACTION = 0.10
 IGNORE_INDEX = -1
 MASK_INPUTS = False  # as in alpaca-lora
 HUGGING_FACE_DATASET_PATH = "b-mc2/sql-create-context"
 SEED = 42
+
 
 def prepare(
     destination_path: Path = DESTINATION_PATH,
@@ -55,10 +56,10 @@ def prepare(
     sql_dataset = sql_dataset.rename_column("question", "instruction")
     sql_dataset = sql_dataset.rename_column("context", "input")
     sql_dataset = sql_dataset.rename_column("answer", "output")
-    
+
     destination_path.mkdir(parents=True, exist_ok=True)
     data_file_path = destination_path / data_file_name
-    
+
     # download_if_missing(data_file_path, data_file_url)
     # with open(data_file_path, "r", encoding="utf-8") as file:
     #     data = json.load(file)
@@ -68,7 +69,9 @@ def prepare(
 
     # Partition the dataset into train and test
     train_set, test_set = random_split(
-        sql_dataset, [1.0 - test_split_fraction, test_split_fraction], generator=torch.Generator().manual_seed(seed)
+        sql_dataset,
+        [1.0 - test_split_fraction, test_split_fraction],
+        generator=torch.Generator().manual_seed(seed),
     )
     train_set, test_set = list(train_set), list(test_set)
 
@@ -154,10 +157,29 @@ def generate_prompt(example):
     'response' field."""
 
     if example["input"]:
+        template = "<s>[INST] <<SYS>>\n{system_prompt}<</SYS>>{user_message} [/INST]"
+
+        
+        system_prompt = (
+            "You are a helpful, respectful and honest assistant. Always answer as helpfully as possible, while being"
+            " safe.  Your answers should not include any harmful, unethical, racist, sexist, toxic, dangerous, or"
+            " illegal content. Please ensure that your responses are socially unbiased and positive in nature. You are"
+            " an expert SQL programmer, you can produce efficient and correct SQL code. The user will generally give"
+            " you a context, which consist in table that compose the SQL database, and than a query. Respond truthfully"
+            " and be concise."
+        )
+        sql_create_context = "The SQL database is composed by the following tables:"
+        prompt_input = "<s>[INST] <<SYS>>\n{system_prompt}<</SYS>>"
+        prompt_no_imput = ""
+
+    if example["input"]:
         return (
-            "Below is an instruction that describes a task, paired with an input that provides further context. "
-            "Write a response that appropriately completes the request.\n\n"
-            f"### Instruction:\n{example['instruction']}\n\n### Input:\n{example['input']}\n\n### Response:"
+            "You are a helpful, respectful and honest assistant. Always answer as helpfully as possible, while being"
+            " safe.  Your answers should not include any harmful, unethical, racist, sexist, toxic, dangerous, or"
+            " illegal content. Please ensure that your responses are socially unbiased and positive in nature.Below is"
+            " an instruction that describes a task, paired with an input that provides further context. Write a"
+            f" response that appropriately completes the request.\n\n### Instruction:\n{example['instruction']}\n\n###"
+            f" Input:\n{example['input']}\n\n### Response:"
         )
     return (
         "Below is an instruction that describes a task. "
