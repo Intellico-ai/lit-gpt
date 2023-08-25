@@ -31,14 +31,14 @@ from scripts.prepare_sql import generate_prompt
 from lightning.pytorch.loggers import TensorBoardLogger
 from datetime import datetime
 from tqdm import tqdm, trange
-    
-    
+
+
 batch_size = 128
-micro_batch_size = 4 # i dont know what happens if it's not divisible
-eval_interval = 5 # evaluate every eval_interval batch
-save_interval = 200 # save every eval_interval batch
-eval_iters = 100 # how many sample for validation are extracted (100*micro_batch_size)
-log_interval = 1 # every tot iterations the training metrics are evaluated
+micro_batch_size = 4  # i dont know what happens if it's not divisible
+eval_interval = 5  # evaluate every eval_interval batch
+save_interval = 200  # save every eval_interval batch
+eval_iters = 100  # how many sample for validation are extracted (100*micro_batch_size)
+log_interval = 1  # every tot iterations the training metrics are evaluated
 devices = 1
 # change this value to force a maximum sequence length
 override_max_seq_length = None
@@ -49,7 +49,7 @@ learning_rate = 3e-4
 TEMPERATURE = 0.1
 gradient_accumulation_iters = batch_size // micro_batch_size
 assert gradient_accumulation_iters > 0
-max_iters = 20000 # number of microbatch processed
+max_iters = 20000  # number of microbatch processed
 weight_decay = 0.01
 lora_r = 8
 lora_alpha = 16
@@ -66,9 +66,9 @@ hparams = {k: v for k, v in locals().items() if isinstance(v, (int, float, str))
 
 
 def setup(
-    data_dir: Path = Path("data/alpaca"),
-    checkpoint_dir: Path = Path(""),
-    out_dir: Path = Path("out/lora/alpaca"),
+    data_dir: Path = Path("data/sql-create-context"),
+    checkpoint_dir: Path = Path("checkpoints/meta-llama/Llama-2-7b-chat-hf/"),
+    out_dir: Path = Path("out/lora/sql_llama_prompt"),
     precision: Optional[str] = None,
     tpu: bool = False,
     quantize: Optional[Literal["bnb.nf4", "bnb.nf4-dq", "bnb.fp4", "bnb.fp4-dq"]] = None,
@@ -100,7 +100,6 @@ def setup(
     fabric = L.Fabric(devices=fabric_devices, strategy=strategy, precision=precision, loggers=logger)
     fabric.print(hparams)
     fabric.launch(main, data_dir, checkpoint_dir, out_dir, quantize)
-
 
 
 def main(fabric: L.Fabric, data_dir: Path, checkpoint_dir: Path, out_dir: Path, quantize: Optional[str] = None):
@@ -189,7 +188,7 @@ def train(
 ) -> None:
     # tensorboard
     current_datetime = datetime.now()
-    formatted_datetime = current_datetime.strftime('%d_%m_%Y-%H-%M')
+    formatted_datetime = current_datetime.strftime("%d_%m_%Y-%H-%M")
 
     tb: TensorBoardLogger = TensorBoardLogger("tb", name=f"LoRA_{formatted_datetime}", flush_secs=1)
     tokenizer = Tokenizer(checkpoint_dir)
@@ -220,7 +219,7 @@ def train(
         import torch_xla.core.xla_model as xm
 
         xm.mark_step()
-        
+
     iters_progress_bar = trange(max_iters)
     for iter_num in iters_progress_bar:
         if step_count <= warmup_steps:
@@ -268,14 +267,8 @@ def train(
             # )
             for param_group in optimizer.param_groups:
                 log_lr = param_group["lr"]
-            tb.log_metrics(
-                {
-                    "loss/train":loss.item(),
-                    "optim/lr":log_lr
-                    },
-                iter_num
-            )
-            
+            tb.log_metrics({"loss/train": loss.item(), "optim/lr": log_lr}, iter_num)
+
         if not is_accumulating and step_count % eval_interval == 0:
             t0 = time.perf_counter()
             val_loss = validate(fabric, model, val_data, tokenizer, longest_seq_length)
@@ -285,9 +278,9 @@ def train(
             fabric.barrier()
             tb.log_metrics(
                 {
-                    "loss/val":val_loss,
-                    },
-                iter_num
+                    "loss/val": val_loss,
+                },
+                iter_num,
             )
         if not is_accumulating and step_count % save_interval == 0:
             checkpoint_path = out_dir / f"iter-{iter_num:06d}-ckpt.pth"
@@ -310,14 +303,18 @@ def validate(
 
     # produce an example:
     instruction = "How many heads of the departments are older than 56 ?"
-    input_string = 	"CREATE TABLE head (age INTEGER)"
+    input_string = "CREATE TABLE head (age INTEGER)"
     fabric.print(instruction)
     sample = {"instruction": instruction, "input": input_string}
     prompt = generate_prompt(sample)
     encoded = tokenizer.encode(prompt, device=fabric.device)
     max_returned_tokens = len(encoded) + 100
     output = generate(
-        model, idx=encoded, max_returned_tokens=max_returned_tokens, max_seq_length=max_returned_tokens, temperature=TEMPERATURE
+        model,
+        idx=encoded,
+        max_returned_tokens=max_returned_tokens,
+        max_seq_length=max_returned_tokens,
+        temperature=TEMPERATURE,
     )
     output = tokenizer.decode(output)
     fabric.print(output)
@@ -370,7 +367,7 @@ def get_max_seq_length(data: List[Dict]) -> Tuple[int, int, int]:
     )
 
 
-def save_lora_checkpoint(fabric : L.Fabric, model, file_path: Path):
+def save_lora_checkpoint(fabric: L.Fabric, model, file_path: Path):
     fabric.print(f"Saving LoRA weights to {str(file_path)!r}")
     fabric.save(file_path, {"model": model}, filter={"model": lora_filter})
 

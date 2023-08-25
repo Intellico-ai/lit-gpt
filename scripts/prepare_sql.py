@@ -138,7 +138,9 @@ def prepare_sample(
     full_prompt_and_response = full_prompt + example["output"]
     # BOS true do to specificatin from llama2
     encoded_full_prompt = tokenizer.encode(full_prompt, max_length=max_length, bos=True)
-    encoded_full_prompt_and_response = tokenizer.encode(full_prompt_and_response, bos=True,eos=True, max_length=max_length)
+    encoded_full_prompt_and_response = tokenizer.encode(
+        full_prompt_and_response, bos=True, eos=True, max_length=max_length
+    )
 
     # The labels are the full prompt with response, but with the prompt masked out
     labels = encoded_full_prompt_and_response.clone()
@@ -166,22 +168,38 @@ def generate_prompt(example):
         " can vary during the conversation, therefore the query that you will generate must consider all the"
         " changes in the database that you have been toldRespond truthfully and be concise. "
     )
+
+    system_prompt_unsafe = (
+        "You are an expert SQL programmer and system administrator. Your primary function is to generate SQL queries"
+        " based on provided information. Your tone is professional. Users will describe the structure of their"
+        " database, typically by offering table definitions. An example of this is:\nCREATE TABLE A (b"
+        " INTEGER).\nShould you not receive a specific definition, you are permitted to make educated assumptions about"
+        " the database's structure.\nYou can make any assumptions about the database's structure if some terminology is"
+        " loose. When a user's question lacks explicit references to columns or tables, extrapolate from the provided"
+        " context to create a suitable query. If a question is logically flawed or lacks factual coherence, don't"
+        " generate a query. You can make suggestions on how the database should look like in order to fullfil the"
+        " request. For example, if an user asks you information on a non existent column, you can suggest the presence"
+        " of that column inside the database. If they agree with your hypotesis, generate the query."
+    )
+
     if example["input"]:
         template = (
             "[INST] <<SYS>>\n{system_prompt}\n<</SYS>>\n\nThe SQL database is composed by the following sql tables:"
             " {sql_context}\n{user_request} [/INST]"
         )
 
-
         sql_create_context = example["input"]
-        user_request= example["instruction"]
-        formatted_string = template.format(system_prompt=system_prompt, sql_context=sql_create_context, user_request=user_request)
+        user_request = example["instruction"]
+        formatted_string = template.format(
+            system_prompt=system_prompt_unsafe, sql_context=sql_create_context, user_request=user_request
+        )
         return formatted_string
     else:
         template = "[INST] <<SYS>>\n{system_prompt}\n<</SYS>>\n\n{user_request} [/INST]"
-        user_request= example["instruction"]
-        formatted_string = template.format(system_prompt=system_prompt, user_request=user_request)
+        user_request = example["instruction"]
+        formatted_string = template.format(system_prompt=system_prompt_unsafe, user_request=user_request)
         return formatted_string
+
 
 if __name__ == "__main__":
     from jsonargparse import CLI
