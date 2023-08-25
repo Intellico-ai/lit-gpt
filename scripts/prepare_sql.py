@@ -136,8 +136,9 @@ def prepare_sample(
     """
     full_prompt = generate_prompt(example)
     full_prompt_and_response = full_prompt + example["output"]
-    encoded_full_prompt = tokenizer.encode(full_prompt, max_length=max_length)
-    encoded_full_prompt_and_response = tokenizer.encode(full_prompt_and_response, eos=True, max_length=max_length)
+    # BOS true do to specificatin from llama2
+    encoded_full_prompt = tokenizer.encode(full_prompt, max_length=max_length, bos=True)
+    encoded_full_prompt_and_response = tokenizer.encode(full_prompt_and_response, bos=True,eos=True, max_length=max_length)
 
     # The labels are the full prompt with response, but with the prompt masked out
     labels = encoded_full_prompt_and_response.clone()
