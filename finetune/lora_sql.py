@@ -42,16 +42,15 @@ LLAMA_HYPER_CONFIG = dict(
     lr_decay_perc=0.1,
     weight_decay=0.1,
     gradient_clipping=1,
-    lr=2e-5,
+    lr=3e-4,
 )
 USE_LLAMA_HYPER_CONFIG = True
 
 batch_size = 128
-# batch_size = 4
 # micro_batch_size = 2  # i dont know what happens if it's not divisible
 micro_batch_size = 2
 n_microb_in_b = batch_size // micro_batch_size
-eval_interval = 1 # evaluate every eval_interval batch
+eval_interval = 5  # evaluate every eval_interval batch
 save_interval = 200  # save every eval_interval batch
 eval_iters = 100  # how many sample for validation are extracted (100*micro_batch_size)
 log_interval = 1  # every tot iterations the training metrics are evaluated
@@ -61,16 +60,18 @@ override_max_seq_length = None
 clip_grad_value = 1
 
 # Hyperparameters
-learning_rate = 3e-4
+if USE_LLAMA_HYPER_CONFIG:
+    learning_rate = LLAMA_HYPER_CONFIG["lr"]
+else:
+    learning_rate = 3e-4
 
 TEMPERATURE = 0.1
 gradient_accumulation_iters = batch_size // micro_batch_size
 assert gradient_accumulation_iters > 0
-# max_iters = 40000  # number of microbatch processed
-max_iters = 40000
+max_iters = 40000  # number of microbatch processed
 max_steps = max_iters // n_microb_in_b // eval_interval
 weight_decay = 0.01
-# lora_r = 8
+# lora_r = 8 
 lora_r = 4
 lora_alpha = 16
 lora_dropout = 0.05
@@ -79,8 +80,8 @@ lora_key = True
 lora_value = True
 lora_projection = True
 lora_mlp = True
-lora_head = False
-warmup_steps = 100
+lora_head = True
+warmup_steps = 20
 
 hparams = {k: v for k, v in locals().items() if isinstance(v, (int, float, str)) and not k.startswith("_")}
 
@@ -176,10 +177,12 @@ def main(fabric: L.Fabric, data_dir: Path, checkpoint_dir: Path, out_dir: Path, 
     fabric.print(f"Number of non trainable parameters: {num_parameters(model, requires_grad=False):,}")
     trainable_params = [p for p in model.parameters() if p.requires_grad]
     max_steps = max_iters // micro_batch_size
+
     if quantize and quantize.startswith("bnb."):
         import bitsandbytes as bnb
 
         if USE_LLAMA_HYPER_CONFIG:
+            fabric.print(f"Using LLama config {LLAMA_HYPER_CONFIG}")
             llama_lr = LLAMA_HYPER_CONFIG["lr"]
             llama_lr_perc = LLAMA_HYPER_CONFIG["lr_decay_perc"]
             optimizer = bnb.optim.PagedAdamW(
@@ -194,10 +197,12 @@ def main(fabric: L.Fabric, data_dir: Path, checkpoint_dir: Path, out_dir: Path, 
             )
 
         else:
+            fabric.print("Using standard config.")
             optimizer = bnb.optim.PagedAdamW(trainable_params, lr=learning_rate, weight_decay=weight_decay)
             scheduler = lr_scheduler.ReduceLROnPlateau(optimizer, mode="min", factor=0.1, patience=10)
     else:
         if USE_LLAMA_HYPER_CONFIG:
+            fabric.print(f"Using LLama config {LLAMA_HYPER_CONFIG}")
             llama_lr = LLAMA_HYPER_CONFIG["lr"]
             llama_lr_perc = LLAMA_HYPER_CONFIG["lr_decay_perc"]
             optimizer = torch.optim.AdamW(
@@ -212,6 +217,7 @@ def main(fabric: L.Fabric, data_dir: Path, checkpoint_dir: Path, out_dir: Path, 
                 optimizer, T_max=max_steps - warmup_steps, eta_min=llama_lr * llama_lr_perc
             )
         else:
+            fabric.print("Using standard config.")
             optimizer = torch.optim.AdamW(trainable_params, lr=learning_rate, weight_decay=weight_decay)
             scheduler = lr_scheduler.ReduceLROnPlateau(optimizer, mode="min", factor=0.1, patience=10)
 
@@ -280,6 +286,7 @@ def train(
         xm.mark_step()
 
     iters_progress_bar = trange(max_iters)
+
     for iter_num in iters_progress_bar:
         if step_count <= warmup_steps:
             # linear warmup
@@ -313,6 +320,7 @@ def train(
             step_count += 1
             # cosine scheduler does this only if not in warmup
             if step_count >= warmup_steps and isinstance(scheduler, lr_scheduler.CosineAnnealingLR):
+                print("scheduler step")
                 scheduler.step()
             iters_progress_bar.set_description(f"Opt Step {step_count}, Iter {iter_num}")
         elif fabric.device.type == "xla":
