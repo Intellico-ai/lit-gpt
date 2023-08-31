@@ -33,12 +33,14 @@ from lightning.pytorch.loggers import TensorBoardLogger
 from datetime import datetime
 from tqdm import tqdm, trange
 
+
+# TODO cosine annealing doesn really interact with this warmup steps
 # default configuration of llama, maybe they are not right for the small amount, i'll do 2 different tries
 LLAMA_HYPER_CONFIG = dict(
     beta1=0.9,
     beta2=0.95,
     adam_eps=1e-5,
-    warmup_steps=2000,
+    warmup_steps=20,
     lr_decay_perc=0.1,
     weight_decay=0.1,
     gradient_clipping=1,
@@ -69,7 +71,9 @@ TEMPERATURE = 0.1
 gradient_accumulation_iters = batch_size // micro_batch_size
 assert gradient_accumulation_iters > 0
 max_iters = 40000  # number of microbatch processed
-max_steps = max_iters // n_microb_in_b // eval_interval
+# TODO differentiate between bax_steps and max_eval_steps
+max_steps = max_iters // n_microb_in_b 
+max_eval_steps = max_steps // eval_interval
 weight_decay = 0.01
 # lora_r = 8 
 lora_r = 4
@@ -81,7 +85,7 @@ lora_value = True
 lora_projection = True
 lora_mlp = True
 lora_head = True
-warmup_steps = 20
+warmup_steps = 1
 
 hparams = {k: v for k, v in locals().items() if isinstance(v, (int, float, str)) and not k.startswith("_")}
 
@@ -176,7 +180,6 @@ def main(fabric: L.Fabric, data_dir: Path, checkpoint_dir: Path, out_dir: Path, 
     fabric.print(f"Number of trainable parameters: {num_parameters(model, requires_grad=True):,}")
     fabric.print(f"Number of non trainable parameters: {num_parameters(model, requires_grad=False):,}")
     trainable_params = [p for p in model.parameters() if p.requires_grad]
-    max_steps = max_iters // micro_batch_size
 
     if quantize and quantize.startswith("bnb."):
         import bitsandbytes as bnb
@@ -214,7 +217,7 @@ def main(fabric: L.Fabric, data_dir: Path, checkpoint_dir: Path, out_dir: Path, 
             )
 
             scheduler = lr_scheduler.CosineAnnealingLR(
-                optimizer, T_max=max_steps - warmup_steps, eta_min=llama_lr * llama_lr_perc
+                optimizer, T_max=max_steps, eta_min=llama_lr * llama_lr_perc
             )
         else:
             fabric.print("Using standard config.")
@@ -321,7 +324,7 @@ def train(
             # cosine scheduler does this only if not in warmup
             if step_count >= warmup_steps and isinstance(scheduler, lr_scheduler.CosineAnnealingLR):
                 print("scheduler step")
-                scheduler.step()
+                scheduler.step(epoch=step_count)
             iters_progress_bar.set_description(f"Opt Step {step_count}, Iter {iter_num}")
         elif fabric.device.type == "xla":
             xm.mark_step()

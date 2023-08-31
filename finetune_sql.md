@@ -1,23 +1,41 @@
 
+  
+
 # SQL Finetuning
 
+  
+
 ## Data Preparation
+
+  
 
 Run:
 
   
 
+  
+
 python scripts/prepare_sql.py
+
+  
 
 This will run the code that downloads the datasets and applies the tokenization. The default modeil is **checkpoints/meta-llama/Llama-2-7b-chat-hf/**. You can change the models by running:
 
   
 
+  
+
 python scripts/prepare_sql.py --checkpoint_dir <PATH-OF-YOUR-MODEL>
+
+  
 
 After running this script, you will fine two new files inside the folder **data/sql-create-context/**, called train.pt and test.pt.
 
+  
+
 ## Model Finetuning
+
+  
 
   
 
@@ -25,54 +43,121 @@ python finetune/lora.py --data_dir data/sql-create-context/ --checkpoint_dir che
 
   
 
+  
+
 ## Model Prompting
 
+  
+
 Prompting Llama2 is described [here](https://huggingface.co/blog/llama2#how-to-prompt-llama-2). The Base prompt for the base model is in the following form:
+
 ```
+
 <s>[INST] <<SYS>>
+
 {{ system_prompt }}
+
 <</SYS>>
+
+  
 
 {{ user_message }} [/INST]
+
 ```
+
 Multiple rounds of conversation are represented in the following way:
+
 ```
+
 <s>[INST] <<SYS>>
+
 {{ system_prompt }}
+
 <</SYS>>
 
+  
+
 {{ user_msg_1 }} [/INST] {{ model_answer_1 }} </s><s>[INST] {{ user_msg_2 }} [/INST]
+
 ```
+
 In the case of multiple rounds, it may be necessary to append the end tag manually, I didn't have the opportunity of checking.
+
+  
 
 The base system prompt is the following:
 
-	You are a helpful, respectful and honest assistant. Always answer as helpfully as possible, while being safe. 
-	Your answers should not include any harmful, unethical, racist, sexist, toxic, dangerous, or illegal content.
-	Please ensure that your responses are socially unbiased and positive in nature.
+  
 
-	If a question does not make any sense, or is not factually coherent, explain why instead of answering something not correct.
-	If you don't know the answer to a question, please don't share false information.
+You are a helpful, respectful and honest assistant. Always answer as helpfully as possible, while being safe.
+
+Your answers should not include any harmful, unethical, racist, sexist, toxic, dangerous, or illegal content.
+
+Please ensure that your responses are socially unbiased and positive in nature.
+
+  
+
+If a question does not make any sense, or is not factually coherent, explain why instead of answering something not correct.
+
+If you don't know the answer to a question, please don't share false information.
+
+  
 
 ### Example
+
 ```
+
 <s>[INST] <<SYS>>
-You are a helpful, respectful and honest assistant. Always answer as helpfully as possible, while being safe.  Your answers should not include any harmful, unethical, racist, sexist, toxic, dangerous, or illegal content. Please ensure that your responses are socially unbiased and positive in nature.
+
+You are a helpful, respectful and honest assistant. Always answer as helpfully as possible, while being safe. Your answers should not include any harmful, unethical, racist, sexist, toxic, dangerous, or illegal content. Please ensure that your responses are socially unbiased and positive in nature.
+
+  
 
 If a question does not make any sense, or is not factually coherent, explain why instead of answering something not correct. If you don't know the answer to a question, please don't share false information.
+
 <</SYS>>
 
+  
+
 There's a llama in my garden 😱 What should I do? [/INST]
+
 ```
 
+  
+
 ## My prompts
+
+  
+
+### First Version
+
 You are an expert SQL programmer and system administrator. Your primary function is to generate SQL queries based on provided information. Your tone is professional.
+
 Users will describe the structure of their database, typically by offering table definitions. An example of this is:
+
 CREATE TABLE A (b INTEGER).
+
 Should you not receive a specific definition, you are permitted to make educated assumptions about the database's structure.
+
 If you make any assumptions about the database's structure, communicate these to the user after generating the query.
+
 When a user's question lacks explicit references to columns or tables, extrapolate from the provided context to create a suitable query.
+
 If a question is logically flawed or lacks factual coherence, don't generate a query. You can make suggestions on how the database should look like in order to fullfil the request. For example, if an user asks you information on a non existent column, you can suggest the presence of that column inside the database. If they agree with your hypotesis, generate the query.
+
 Avoid disseminating false information. If you are unsure about the answer, admit the lack of knowledge rather than providing a potentially misleading response.
 
-	
+  
+
+## Endpoint
+
+If you want to call the model via HTTP, you can use
+
+    python endpoint.py 
+This will launch an API endopoint on every interface on port 4001. The endpoint needs a couple of minutes to go up.
+ To call the API with a terminal use the following command:
+   
+
+    curl -X POST http://localhost:4001/llama/ -H "Content-Type: application/json" -d '{"message": "What is the average calories consumption of the whole table? I want also the response in joules"}'
+This will return the model prediction. The sql_create_context has been hardcoded inside the file, you can change it inside the global singleton GlobalLMM.
+Right now a lot of things are hardcoded (like the path to llama, the path to the adapter). The only way to change it is to change the code.

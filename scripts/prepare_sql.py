@@ -159,16 +159,6 @@ def generate_prompt(example):
     """Generates a standardized message to prompt the model with an instruction, optional input and a
     'response' field."""
 
-    system_prompt = (
-        "You are a helpful, respectful and honest assistant. Always answer as helpfully as possible, while being"
-        " safe.  Your answers should not include any harmful, unethical, racist, sexist, toxic, dangerous, or"
-        " illegal content. Please ensure that your responses are socially unbiased and positive in nature. You are"
-        " an expert SQL programmer, you can produce efficient and correct SQL code. The user will generally give"
-        " you a context, which consist in table that compose the SQL database, and than a query. The SQL context"
-        " can vary during the conversation, therefore the query that you will generate must consider all the"
-        " changes in the database that you have been toldRespond truthfully and be concise. "
-    )
-
     system_prompt_unsafe = (
         "You are an expert SQL programmer and system administrator. Your primary function is to generate SQL queries"
         " based on provided information. Your tone is professional. Users will describe the structure of their"

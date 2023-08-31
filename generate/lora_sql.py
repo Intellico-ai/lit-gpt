@@ -19,23 +19,23 @@ from lit_gpt.lora import GPT, Block, Config, merge_lora_weights
 from lit_gpt.utils import check_valid_checkpoint_dir, get_default_supported_precision, lazy_load, quantization
 from scripts.prepare_sql import generate_prompt
 
-lora_r = 8
+lora_r = 4
 lora_alpha = 16
 lora_dropout = 0.05
 lora_query = True
-lora_key = False
+lora_key = True
 lora_value = True
-lora_projection = False
-lora_mlp = False
-lora_head = False
+lora_projection = True
+lora_mlp = True
+lora_head = True
 
 
 def main(
     prompt: str = "What food do lamas eat?",
     input: str = "",
-    lora_path: Path = Path("out/lora/alpaca/lit_model_lora_finetuned.pth"),
-    checkpoint_dir: Path = Path("checkpoints/stabilityai/stablelm-base-alpha-3b"),
-    quantize: Optional[Literal["bnb.nf4", "bnb.nf4-dq", "bnb.fp4", "bnb.fp4-dq", "bnb.int8", "gptq.int4"]] = None,
+    lora_path: Path = Path("out/lora/sql_llama_cosine_scheduler/iter-025599-ckpt.pth"),
+    checkpoint_dir: Path = Path("checkpoints/meta-llama/Llama-2-7b-chat-hf"),
+    quantize: Optional[Literal["bnb.nf4", "bnb.nf4-dq", "bnb.fp4", "bnb.fp4-dq", "bnb.int8", "gptq.int4"]] = "bnb.nf4",
     max_new_tokens: int = 100,
     top_k: int = 200,
     temperature: float = 0.8,
@@ -138,7 +138,6 @@ def main(
 
     model.reset_cache()
     output = tokenizer.decode(y)
-    output = output.split("### Response:")[1].strip()
     fabric.print(output)
 
     tokens_generated = y.size(0) - prompt_length
